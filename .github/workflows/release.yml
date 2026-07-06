@@ -1,0 +1,57 @@
+# 发布工作流
+# 触发条件：推送 v* 格式的 tag（如 v0.1.0）
+# 自动构建 DMG 并创建 GitHub Release
+
+name: 发布
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  # 阶段 1：构建 macOS DMG
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 校验版本一致性
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          FILE_VERSION=$(tr -d '[:space:]' < VERSION)
+          if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
+            echo "错误：tag 版本 ($TAG_VERSION) 与 VERSION 文件 ($FILE_VERSION) 不一致"
+            exit 1
+          fi
+          echo "版本校验通过：$TAG_VERSION"
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+
+      - name: 安装 Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建 Tauri 应用
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'EasyTier 网络管家 ${{ github.ref_name }}'
+          releaseBody: '详见 CHANGELOG'
+          releaseDraft: false
+          prerelease: false

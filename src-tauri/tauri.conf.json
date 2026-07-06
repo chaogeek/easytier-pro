@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "easytier-pro",
+  "productName": "EasyTier 网络管家",
   "version": "0.1.0",
   "identifier": "com.chaogeek.easytier-pro",
   "build": {
@@ -12,9 +12,13 @@
   "app": {
     "windows": [
       {
-        "title": "easytier-pro",
-        "width": 800,
-        "height": 600
+        "title": "EasyTier 网络管家",
+        "width": 860,
+        "height": 660,
+        "resizable": false,
+        "minimizable": true,
+        "maximizable": false,
+        "center": true
       }
     ],
     "security": {
