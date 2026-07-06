@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   Typography,
   Box,
@@ -8,8 +9,11 @@ import {
   Button,
   CircularProgress,
   Chip,
+  LinearProgress,
 } from "@mui/material";
 import UpdateIcon from "@mui/icons-material/SystemUpdateAlt";
+import RestartIcon from "@mui/icons-material/RestartAlt";
+import DownloadIcon from "@mui/icons-material/Download";
 import AppIcon from "@mui/icons-material/Apps";
 import CoreIcon from "@mui/icons-material/Memory";
 import ErrorIcon from "@mui/icons-material/Error";
@@ -31,7 +35,14 @@ interface CoreUpdateInfo {
   download_url: string;
 }
 
-/// 最短加载延迟（ms），确保用户能看到动画
+/// 下载进度
+interface DownloadProgress {
+  downloaded: number;
+  total: number;
+  percentage: number;
+}
+
+/// 最短加载延迟（ms）
 const MIN_LOADING_DELAY = 800;
 
 /// 设置页面
@@ -41,6 +52,11 @@ export default function SettingsPage() {
   const [appUpdate, setAppUpdate] = useState<AppUpdateInfo | null>(null);
   const [appChecking, setAppChecking] = useState(false);
   const [appError, setAppError] = useState<string | null>(null);
+
+  // 下载相关
+  const [appDownloading, setAppDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+  const [downloadDone, setDownloadDone] = useState(false); // 下载完成，等待用户点重启
 
   // ========== Core 版本相关状态 ==========
   const [coreVersion, setCoreVersion] = useState<string>("");
@@ -64,11 +80,26 @@ export default function SettingsPage() {
     }
   };
 
+  /// 监听下载进度事件
+  useEffect(() => {
+    const unlisten = listen<DownloadProgress>(
+      "update-download-progress",
+      (event) => {
+        setDownloadProgress(event.payload);
+      }
+    );
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   /// 检查 App 自更新
   const handleCheckAppUpdate = async () => {
     setAppChecking(true);
     setAppError(null);
     setAppUpdate(null);
+    setDownloadDone(false);
+    setDownloadProgress(null);
     try {
       const minDelay = new Promise<void>((r) => setTimeout(r, MIN_LOADING_DELAY));
       const [result] = await Promise.all([
@@ -81,6 +112,40 @@ export default function SettingsPage() {
       setAppError(msg);
     } finally {
       setAppChecking(false);
+    }
+  };
+
+  /// 下载更新（带进度）
+  const handleDownloadUpdate = async () => {
+    if (!appUpdate?.download_url) return;
+    setAppDownloading(true);
+    setAppError(null);
+    setDownloadProgress({ downloaded: 0, total: 0, percentage: 0 });
+    try {
+      // 最小延迟确保进度条可见（即使下载很快/缓存命中）
+      const minDelay = new Promise<void>((r) => setTimeout(r, MIN_LOADING_DELAY));
+      const [,] = await Promise.all([
+        invoke("download_app_update", { downloadUrl: appUpdate.download_url }),
+        minDelay,
+      ]);
+      setDownloadDone(true);
+    } catch (e) {
+      const msg = typeof e === "string" ? e : (e as Error).message || "未知错误";
+      setAppError(`下载更新失败：${msg}`);
+    } finally {
+      setAppDownloading(false);
+    }
+  };
+
+  /// 立即重启安装更新
+  const handleRestartInstall = async () => {
+    setAppError(null);
+    try {
+      await invoke("install_app_update");
+      // 成功后 App 会退出重启，不会执行到这里
+    } catch (e) {
+      const msg = typeof e === "string" ? e : (e as Error).message || "未知错误";
+      setAppError(`安装更新失败：${msg}`);
     }
   };
 
@@ -108,6 +173,13 @@ export default function SettingsPage() {
   useEffect(() => {
     loadVersions();
   }, []);
+
+  // ========== 格式化文件大小 ==========
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
 
   // ========== 公共组件：更新版本 Chip ==========
   const renderUpdateChip = (hasUpdate: boolean, latestVersion: string) => {
@@ -160,7 +232,13 @@ export default function SettingsPage() {
     checking: boolean,
     onCheck: () => void,
     error: string | null,
-    update: AppUpdateInfo | CoreUpdateInfo | null
+    update: AppUpdateInfo | CoreUpdateInfo | null,
+    // 以下仅 App 卡片使用
+    downloading?: boolean,
+    progress?: DownloadProgress | null,
+    isDownloadDone?: boolean,
+    onDownload?: () => void,
+    onRestart?: () => void
   ) => (
     <Card sx={{ mb: 2 }}>
       <CardContent>
@@ -205,15 +283,88 @@ export default function SettingsPage() {
               pt: 2,
               borderTop: "1px solid",
               borderColor: "divider",
-              display: "flex",
-              alignItems: "center",
-              gap: 1,
             }}
           >
-            <Typography variant="body2" sx={{ fontWeight: "medium" }}>
-              {update.current_version} →
-            </Typography>
-            {renderUpdateChip(update.has_update, update.latest_version)}
+            {/* 版本信息行：版本号 + Chip + 操作按钮（右对齐） */}
+            <Box
+              sx={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+                <Typography variant="body2" sx={{ fontWeight: "medium" }}>
+                  {update.current_version} →
+                </Typography>
+                {renderUpdateChip(update.has_update, update.latest_version)}
+              </Box>
+
+              {/* 操作按钮区（右对齐） */}
+              {update.has_update && (
+                <Box sx={{ display: "flex", gap: 1 }}>
+                  {/* 下载完成 → 显示立即重启 */}
+                  {isDownloadDone && onRestart ? (
+                    <Button
+                      variant="contained"
+                      size="small"
+                      color="success"
+                      startIcon={<RestartIcon />}
+                      onClick={onRestart}
+                    >
+                      立即重启
+                    </Button>
+                  ) : onDownload ? (
+                    <Button
+                      variant="contained"
+                      size="small"
+                      color="primary"
+                      startIcon={
+                        downloading ? (
+                          <CircularProgress size={14} />
+                        ) : (
+                          <DownloadIcon />
+                        )
+                      }
+                      onClick={onDownload}
+                      disabled={downloading}
+                    >
+                      {downloading ? "下载中..." : "立即更新"}
+                    </Button>
+                  ) : null}
+                </Box>
+              )}
+            </Box>
+
+            {/* 下载进度条 */}
+            {downloading && progress && (
+              <Box sx={{ mt: 1.5 }}>
+                <LinearProgress
+                  variant={progress.total > 0 ? "determinate" : "indeterminate"}
+                  value={progress.total > 0 ? progress.percentage : undefined}
+                />
+                <Typography
+                  variant="caption"
+                  color="text.secondary"
+                  sx={{ mt: 0.5, display: "block" }}
+                >
+                  {progress.total > 0
+                    ? `${formatSize(progress.downloaded)} / ${formatSize(progress.total)} (${progress.percentage}%)`
+                    : "正在下载..."}
+                </Typography>
+              </Box>
+            )}
+
+            {/* 下载完成提示 */}
+            {isDownloadDone && !downloading && (
+              <Typography
+                variant="body2"
+                color="success.main"
+                sx={{ mt: 1.5, display: "flex", alignItems: "center", gap: 0.5 }}
+              >
+                下载完成，点击「立即重启」开始安装更新
+              </Typography>
+            )}
           </Box>
         )}
       </CardContent>
@@ -237,7 +388,12 @@ export default function SettingsPage() {
         appChecking,
         handleCheckAppUpdate,
         appError,
-        appUpdate
+        appUpdate,
+        appDownloading,
+        downloadProgress,
+        downloadDone,
+        handleDownloadUpdate,
+        handleRestartInstall
       )}
 
       {/* easytier-core 版本卡片 */}
