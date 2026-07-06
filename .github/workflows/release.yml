@@ -1,5 +1,5 @@
 # 发布工作流
-# 触发条件：推送 v* 格式的 tag（如 v0.1.0）
+# 触发条件：推送 v* 格式的 tag（如 v0.0.1）
 # 自动构建 DMG 并创建 GitHub Release
 
 name: 发布
@@ -9,6 +9,10 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+
+# 赋予创建 Release 的权限
+permissions:
+  contents: write
 
 jobs:
   # 阶段 1：构建 macOS DMG
