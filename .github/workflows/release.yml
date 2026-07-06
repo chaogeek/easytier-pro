@@ -13,6 +13,11 @@ on:
 permissions:
   contents: write
 
+# Windows 默认用 PowerShell，这里强制所有 step 使用 bash
+defaults:
+  run:
+    shell: bash
+
 jobs:
   # 阶段 1：多平台构建
   build:
