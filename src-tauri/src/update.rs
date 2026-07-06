@@ -187,3 +187,164 @@ pub fn check_core_update(current_version: &str) -> Result<CoreUpdateInfo> {
         download_url,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========== strip_v_prefix 测试 ==========
+
+    #[test]
+    fn test_strip_v_prefix_with_v() {
+        assert_eq!(strip_v_prefix("v1.2.3"), "1.2.3");
+    }
+
+    #[test]
+    fn test_strip_v_prefix_without_v() {
+        assert_eq!(strip_v_prefix("1.2.3"), "1.2.3");
+    }
+
+    #[test]
+    fn test_strip_v_prefix_empty() {
+        assert_eq!(strip_v_prefix(""), "");
+    }
+
+    // ========== is_newer 测试 ==========
+
+    #[test]
+    fn test_is_newer_latest_greater() {
+        assert!(is_newer("0.0.1", "v0.0.2"));
+        assert!(is_newer("1.0.0", "v2.0.0"));
+        assert!(is_newer("1.0.0", "1.1.0"));
+        assert!(is_newer("1.0.0", "1.0.1"));
+    }
+
+    #[test]
+    fn test_is_newer_same_version() {
+        assert!(!is_newer("0.0.1", "v0.0.1"));
+        assert!(!is_newer("0.0.1", "0.0.1"));
+        assert!(!is_newer("1.2.3", "v1.2.3"));
+    }
+
+    #[test]
+    fn test_is_newer_current_greater() {
+        assert!(!is_newer("0.0.2", "v0.0.1"));
+        assert!(!is_newer("2.0.0", "v1.0.0"));
+    }
+
+    #[test]
+    fn test_is_newer_both_no_v_prefix() {
+        assert!(is_newer("0.0.1", "0.0.2"));
+        assert!(!is_newer("0.0.2", "0.0.1"));
+    }
+
+    #[test]
+    fn test_is_newer_invalid_version_returns_false() {
+        // 无效版本号应安全返回 false（不 panic）
+        assert!(!is_newer("invalid", "v1.0.0"));
+        assert!(!is_newer("1.0.0", "invalid"));
+        assert!(!is_newer("", "v1.0.0"));
+    }
+
+    // ========== select_dmg_asset 测试 ==========
+
+    fn make_assets(names: &[&str]) -> Vec<GitHubAsset> {
+        names
+            .iter()
+            .map(|name| GitHubAsset {
+                name: name.to_string(),
+                browser_download_url: format!("https://example.com/{}", name),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn test_select_dmg_prefers_arch() {
+        let assets = make_assets(&[
+            "EasyTierManager-x86_64-v1.0.0.dmg",
+            "EasyTierManager-aarch64-v1.0.0.dmg",
+        ]);
+
+        let selected = select_dmg_asset(&assets).unwrap();
+        // 在 aarch64 机器上应选 aarch64 版本
+        if cfg!(target_arch = "aarch64") {
+            assert!(selected.name.contains("aarch64"));
+        } else {
+            assert!(selected.name.contains("x86_64"));
+        }
+    }
+
+    #[test]
+    fn test_select_dmg_fallback_to_first() {
+        let assets = make_assets(&[
+            "some-other-file.txt",
+            "EasyTierManager-arm64-v1.0.0.dmg",
+        ]);
+
+        let selected = select_dmg_asset(&assets).unwrap();
+        assert!(selected.name.ends_with(".dmg"));
+    }
+
+    #[test]
+    fn test_select_dmg_no_match() {
+        let assets = make_assets(&["readme.md", "source.zip"]);
+        assert!(select_dmg_asset(&assets).is_none());
+    }
+
+    // ========== select_core_zip_asset 测试 ==========
+
+    #[test]
+    fn test_select_core_zip_prefers_macos_arch() {
+        let assets = make_assets(&[
+            "easytier-windows-x86_64-v2.6.4.zip",
+            "easytier-macos-aarch64-v2.6.4.zip",
+            "easytier-macos-x86_64-v2.6.4.zip",
+            "easytier-linux-x86_64-v2.6.4.zip",
+        ]);
+
+        let selected = select_core_zip_asset(&assets).unwrap();
+        assert!(selected.name.contains("macos"));
+        // 在当前架构机器上应选对应架构
+        if cfg!(target_arch = "aarch64") {
+            assert!(selected.name.contains("aarch64"));
+        } else {
+            assert!(selected.name.contains("x86_64"));
+        }
+    }
+
+    #[test]
+    fn test_select_core_zip_no_match() {
+        let assets = make_assets(&["readme.md", "source.tar.gz"]);
+        assert!(select_core_zip_asset(&assets).is_none());
+    }
+
+    // ========== 集成测试：完整更新检查流程 ==========
+
+    #[test]
+    fn test_update_info_structures() {
+        // 测试结构体创建和序列化
+        let app_info = AppUpdateInfo {
+            has_update: true,
+            current_version: "0.0.1".into(),
+            latest_version: "0.0.2".into(),
+            release_notes: "修复若干问题".into(),
+            download_url: "https://example.com/app.dmg".into(),
+        };
+
+        let json = serde_json::to_string(&app_info).unwrap();
+        assert!(json.contains("0.0.1"));
+        assert!(json.contains("0.0.2"));
+        assert!(json.contains("has_update"));
+
+        let core_info = CoreUpdateInfo {
+            has_update: false,
+            current_version: "2.6.4".into(),
+            latest_version: "2.6.4".into(),
+            download_url: "".into(),
+        };
+
+        let json = serde_json::to_string(&core_info).unwrap();
+        assert!(json.contains("2.6.4"));
+        assert!(!json.contains("\"has_update\":true"));
+    }
+}
