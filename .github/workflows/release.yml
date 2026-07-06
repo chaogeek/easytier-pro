@@ -1,6 +1,6 @@
 # 发布工作流
-# 触发条件：推送 v* 格式的 tag（如 v0.0.1）
-# 自动构建 DMG 并创建 GitHub Release
+# 触发条件：推送 v* 格式的 tag（如 v0.0.2）
+# 自动构建 macOS / Windows / Linux 安装包并创建 GitHub Release
 
 name: 发布
 
@@ -10,14 +10,38 @@ on:
       - 'v*'
   workflow_dispatch:
 
-# 赋予创建 Release 的权限
 permissions:
   contents: write
 
 jobs:
-  # 阶段 1：构建 macOS DMG
+  # 阶段 1：多平台构建
   build:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS ARM64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: dmg-macos-arm64
+            artifact_pattern: '*.dmg'
+          # macOS x86_64
+          - os: macos-13
+            target: x86_64-apple-darwin
+            artifact_name: dmg-macos-x86_64
+            artifact_pattern: '*.dmg'
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: msi-windows-x86_64
+            artifact_pattern: '*.msi'
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: deb-linux-x86_64
+            artifact_pattern: '*.deb'
+
+    runs-on: ${{ matrix.os }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -45,6 +69,15 @@ jobs:
 
       - name: 安装 Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # Linux 需要系统依赖
+      - name: 安装 Linux 系统依赖
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libgtk-3-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
 
       - name: 安装前端依赖
         run: pnpm install --frozen-lockfile
@@ -55,7 +88,89 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: 'EasyTier 网络管家 ${{ github.ref_name }}'
+          releaseName: 'easytier-pro ${{ github.ref_name }}'
           releaseBody: '详见 CHANGELOG'
           releaseDraft: false
           prerelease: false
+          includeUpdaterJson: true
+          args: ${{ matrix.target != '' && format('--target {0}', matrix.target) || '' }}
+
+  # 阶段 2：更新 Homebrew Tap
+  homebrew:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出 Homebrew Tap
+        uses: actions/checkout@v4
+        with:
+          repository: chaogeek/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_PAT || secrets.GITHUB_TOKEN }}
+          path: tap
+
+      - name: 获取 macOS ARM64 DMG 信息
+        id: dmg_info
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # 等待 GitHub Release 创建完成
+          sleep 30
+          # 下载 DMG
+          DMG_URL="https://github.com/chaogeek/easytier-pro/releases/download/${GITHUB_REF_NAME}/easytier-pro_${VERSION}_aarch64.dmg"
+          curl -fSL -o easytier-pro.dmg "$DMG_URL" || {
+            echo "下载 DMG 失败，可能还在构建中，跳过 Homebrew 更新"
+            exit 0
+          }
+          SHA256=$(shasum -a 256 easytier-pro.dmg | awk '{print $1}')
+          echo "sha256=${SHA256}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: 更新 Cask 文件
+        if: steps.dmg_info.outputs.sha256 != ''
+        run: |
+          VERSION="${{ steps.dmg_info.outputs.version }}"
+          SHA="${{ steps.dmg_info.outputs.sha256 }}"
+
+          cat > tap/Casks/easytier-pro.rb << 'CASKDEF'
+          cask "easytier-pro" do
+            version "VERSION_PLACEHOLDER"
+            sha256 "SHA_PLACEHOLDER"
+
+            on_arm do
+              url "https://github.com/chaogeek/easytier-pro/releases/download/vVERSION_PLACEHOLDER/easytier-pro_VERSION_PLACEHOLDER_aarch64.dmg"
+            end
+            on_intel do
+              url "https://github.com/chaogeek/easytier-pro/releases/download/vVERSION_PLACEHOLDER/easytier-pro_VERSION_PLACEHOLDER_x86_64.dmg"
+              sha256 "SHA_PLACEHOLDER"
+            end
+
+            name "easytier-pro"
+            desc "EasyTier 网络管家 — 组网 VPN 桌面管理工具"
+            homepage "https://github.com/chaogeek/easytier-pro"
+
+            app "easytier-pro.app"
+
+            auto_updates true
+
+            zap trash: [
+              "~/Library/Application Support/EasyTierManager",
+              "~/Library/Preferences/com.chaogeek.easytier-pro.plist",
+              "~/Library/Caches/com.easytier.manager",
+            ]
+          end
+          CASKDEF
+
+          sed -i '' "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Casks/easytier-pro.rb
+          sed -i '' "s/SHA_PLACEHOLDER/${SHA}/g" tap/Casks/easytier-pro.rb
+
+          cat tap/Casks/easytier-pro.rb
+
+      - name: 提交 Homebrew Tap 更新
+        if: steps.dmg_info.outputs.sha256 != ''
+        run: |
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Casks/easytier-pro.rb
+          git commit -m "easytier-pro ${{ github.ref_name }}" || echo "无需更新"
+          git push || echo "推送失败（可能需要设置 HOMEBREW_TAP_PAT）"

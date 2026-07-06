@@ -1,7 +1,7 @@
 // 更新机制模块
 // 负责两个独立的更新检查：
-// 1. App 自更新 — 检查 easytier.782389.xyz
-// 2. easytier-core 版本检查 — 检查 GitHub Releases API
+// 1. App 自更新 — 检查 GitHub Releases API (chaogeek/easytier-pro)
+// 2. easytier-core 版本检查 — 检查 GitHub Releases API (EasyTier/EasyTier)
 
 use anyhow::{Context, Result};
 use semver::Version;
@@ -51,8 +51,13 @@ pub struct CoreUpdateInfo {
     pub download_url: String,
 }
 
-/// App 自更新检查 URL
+/// App 自更新检查 URL（CF Worker 代理，可替换为直接 GitHub API）
+/// CF Worker 地址: https://easytier.782389.xyz（需更新指向 chaogeek/easytier-pro）
 const APP_UPDATE_URL: &str = "https://easytier.782389.xyz";
+
+/// App 自更新备选 URL（直接使用 GitHub API）
+const APP_UPDATE_URL_DIRECT: &str =
+    "https://api.github.com/repos/chaogeek/easytier-pro/releases/latest";
 
 /// easytier-core GitHub Releases API URL
 const CORE_UPDATE_URL: &str =
@@ -80,6 +85,7 @@ fn is_newer(current: &str, latest: &str) -> bool {
 }
 
 /// 根据当前架构选择正确的 DMG 资产
+/// Tauri 命名格式：easytier-pro_{version}_{arch}.dmg
 fn select_dmg_asset(assets: &[GitHubAsset]) -> Option<&GitHubAsset> {
     let arch = std::env::consts::ARCH;
     let arch_keyword = match arch {
@@ -88,10 +94,13 @@ fn select_dmg_asset(assets: &[GitHubAsset]) -> Option<&GitHubAsset> {
         _ => "x86_64",
     };
 
-    // 优先匹配架构对应的 DMG
+    // 优先匹配架构对应的 DMG（支持新旧两种命名格式）
     assets
         .iter()
-        .find(|a| a.name.ends_with(".dmg") && a.name.contains(arch_keyword))
+        .find(|a| {
+            a.name.ends_with(".dmg")
+                && (a.name.contains(arch_keyword) || a.name.contains("arm64"))
+        })
         .or_else(|| {
             // 兜底：取第一个 .dmg
             assets.iter().find(|a| a.name.ends_with(".dmg"))
@@ -134,13 +143,15 @@ fn build_client(version: &str) -> Result<reqwest::blocking::Client> {
 }
 
 /// 检查 App 自更新
-/// 从 easytier.782389.xyz 获取最新版本信息
+/// 从 GitHub Releases API 获取最新版本信息（或通过 CF Worker）
 pub fn check_app_update(current_version: &str) -> Result<AppUpdateInfo> {
     let client = build_client(current_version)?;
 
+    // 优先使用 CF Worker（可缓存、不限流），失败则用 GitHub 直连
     let release: GitHubRelease = client
         .get(APP_UPDATE_URL)
         .send()
+        .or_else(|_| client.get(APP_UPDATE_URL_DIRECT).send())
         .context("获取 App 更新信息失败")?
         .json()
         .context("解析 App 更新信息失败")?;
