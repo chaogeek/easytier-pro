@@ -43,6 +43,17 @@ fn get_app_version() -> String {
     version::APP_VERSION.to_string()
 }
 
+/// 获取 easytier-core 当前版本号
+#[tauri::command]
+fn get_core_version(state: State<AppState>) -> String {
+    let core_ver = state.core_version.lock().unwrap().clone();
+    if core_ver.is_empty() {
+        "2.6.4".to_string()
+    } else {
+        core_ver
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -55,6 +66,7 @@ pub fn run() {
             check_app_update,
             check_core_update,
             get_app_version,
+            get_core_version,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
