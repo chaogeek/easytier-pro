@@ -51,13 +51,10 @@ pub struct CoreUpdateInfo {
     pub download_url: String,
 }
 
-/// App 自更新检查 URL（CF Worker 代理，可替换为直接 GitHub API）
-/// CF Worker 地址: https://easytier.782389.xyz（需更新指向 chaogeek/easytier-pro）
+/// App 自更新检查 URL
+/// 由 Cloudflare Worker 代理 GitHub Releases API
+/// CF Worker 地址: https://easytier.782389.xyz
 const APP_UPDATE_URL: &str = "https://easytier.782389.xyz";
-
-/// App 自更新备选 URL（直接使用 GitHub API）
-const APP_UPDATE_URL_DIRECT: &str =
-    "https://api.github.com/repos/chaogeek/easytier-pro/releases/latest";
 
 /// easytier-core GitHub Releases API URL
 const CORE_UPDATE_URL: &str =
@@ -143,15 +140,13 @@ fn build_client(version: &str) -> Result<reqwest::blocking::Client> {
 }
 
 /// 检查 App 自更新
-/// 从 GitHub Releases API 获取最新版本信息（或通过 CF Worker）
+/// 通过 CF Worker 获取最新版本信息（避免 GitHub API 限流）
 pub fn check_app_update(current_version: &str) -> Result<AppUpdateInfo> {
     let client = build_client(current_version)?;
 
-    // 优先使用 CF Worker（可缓存、不限流），失败则用 GitHub 直连
     let release: GitHubRelease = client
         .get(APP_UPDATE_URL)
         .send()
-        .or_else(|_| client.get(APP_UPDATE_URL_DIRECT).send())
         .context("获取 App 更新信息失败")?
         .json()
         .context("解析 App 更新信息失败")?;

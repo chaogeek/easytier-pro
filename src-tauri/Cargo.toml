@@ -1,6 +1,6 @@
 [package]
 name = "easytier-pro"
-version = "0.0.3"
+version = "0.0.4"
 description = "EasyTier 网络管家 — 组网 VPN 桌面管理工具"
 authors = ["chaogeek"]
 edition = "2021"

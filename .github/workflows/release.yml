@@ -107,41 +107,56 @@ jobs:
           token: ${{ secrets.HOMEBREW_TAP_PAT || secrets.GITHUB_TOKEN }}
           path: tap
 
-      - name: 获取 macOS ARM64 DMG 信息
+      - name: 获取 macOS DMG SHA256
         id: dmg_info
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          # 等待 GitHub Release 创建完成
-          sleep 30
-          # 下载 DMG
-          DMG_URL="https://github.com/chaogeek/easytier-pro/releases/download/${GITHUB_REF_NAME}/easytier-pro_${VERSION}_aarch64.dmg"
-          curl -fSL -o easytier-pro.dmg "$DMG_URL" || {
-            echo "下载 DMG 失败，可能还在构建中，跳过 Homebrew 更新"
-            exit 0
-          }
-          SHA256=$(shasum -a 256 easytier-pro.dmg | awk '{print $1}')
-          echo "sha256=${SHA256}" >> $GITHUB_OUTPUT
+          BASE_URL="https://github.com/chaogeek/easytier-pro/releases/download/${GITHUB_REF_NAME}"
+
+          # 等待 Release 创建完成
+          sleep 60
+
+          # 下载 ARM64 DMG
+          ARM64_URL="${BASE_URL}/easytier-pro_${VERSION}_aarch64.dmg"
+          if curl -fSL -o arm64.dmg "$ARM64_URL" 2>/dev/null; then
+            ARM64_SHA=$(shasum -a 256 arm64.dmg | awk '{print $1}')
+            echo "arm64_sha=${ARM64_SHA}" >> $GITHUB_OUTPUT
+            echo "ARM64 SHA256: ${ARM64_SHA}"
+          else
+            echo "ARM64 DMG 下载失败，跳过"
+          fi
+
+          # 下载 x86_64 DMG
+          X86_URL="${BASE_URL}/easytier-pro_${VERSION}_x86_64.dmg"
+          if curl -fSL -o x86_64.dmg "$X86_URL" 2>/dev/null; then
+            X86_SHA=$(shasum -a 256 x86_64.dmg | awk '{print $1}')
+            echo "x86_64_sha=${X86_SHA}" >> $GITHUB_OUTPUT
+            echo "x86_64 SHA256: ${X86_SHA}"
+          else
+            echo "x86_64 DMG 下载失败，跳过"
+          fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: 更新 Cask 文件
-        if: steps.dmg_info.outputs.sha256 != ''
+        if: steps.dmg_info.outputs.arm64_sha != ''
         run: |
           VERSION="${{ steps.dmg_info.outputs.version }}"
-          SHA="${{ steps.dmg_info.outputs.sha256 }}"
+          ARM64_SHA="${{ steps.dmg_info.outputs.arm64_sha }}"
+          X86_SHA="${{ steps.dmg_info.outputs.x86_64_sha }}"
 
-          cat > tap/Casks/easytier-pro.rb << 'CASKDEF'
+          cat > tap/Casks/easytier-pro.rb << CASKDEF
           cask "easytier-pro" do
             version "VERSION_PLACEHOLDER"
-            sha256 "SHA_PLACEHOLDER"
+            sha256 arm:   "ARM64_SHA_PLACEHOLDER",
+                   intel: "X86_SHA_PLACEHOLDER"
 
             on_arm do
               url "https://github.com/chaogeek/easytier-pro/releases/download/vVERSION_PLACEHOLDER/easytier-pro_VERSION_PLACEHOLDER_aarch64.dmg"
             end
             on_intel do
               url "https://github.com/chaogeek/easytier-pro/releases/download/vVERSION_PLACEHOLDER/easytier-pro_VERSION_PLACEHOLDER_x86_64.dmg"
-              sha256 "SHA_PLACEHOLDER"
             end
 
             name "easytier-pro"
@@ -160,13 +175,14 @@ jobs:
           end
           CASKDEF
 
-          sed -i '' "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Casks/easytier-pro.rb
-          sed -i '' "s/SHA_PLACEHOLDER/${SHA}/g" tap/Casks/easytier-pro.rb
+          sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Casks/easytier-pro.rb
+          sed -i "s/ARM64_SHA_PLACEHOLDER/${ARM64_SHA}/g" tap/Casks/easytier-pro.rb
+          sed -i "s/X86_SHA_PLACEHOLDER/${X86_SHA:-PLACEHOLDER_X86_64_SHA256}/g" tap/Casks/easytier-pro.rb
 
           cat tap/Casks/easytier-pro.rb
 
       - name: 提交 Homebrew Tap 更新
-        if: steps.dmg_info.outputs.sha256 != ''
+        if: steps.dmg_info.outputs.arm64_sha != ''
         run: |
           cd tap
           git config user.name "github-actions[bot]"
