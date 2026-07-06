@@ -53,8 +53,8 @@ pub struct CoreUpdateInfo {
 
 /// App 自更新检查 URL
 /// 由 Cloudflare Worker 代理 GitHub Releases API
-/// CF Worker 地址: https://easytier.782389.xyz
-const APP_UPDATE_URL: &str = "https://easytier.782389.xyz";
+/// 自定义域名: https://easytier-pro.782389.xyz
+const APP_UPDATE_URL: &str = "https://easytier-pro.782389.xyz";
 
 /// easytier-core GitHub Releases API URL
 const CORE_UPDATE_URL: &str =
@@ -267,12 +267,11 @@ mod tests {
     #[test]
     fn test_select_dmg_prefers_arch() {
         let assets = make_assets(&[
-            "EasyTierManager-x86_64-v1.0.0.dmg",
-            "EasyTierManager-aarch64-v1.0.0.dmg",
+            "easytier-pro_0.0.4_x86_64.dmg",
+            "easytier-pro_0.0.4_aarch64.dmg",
         ]);
 
         let selected = select_dmg_asset(&assets).unwrap();
-        // 在 aarch64 机器上应选 aarch64 版本
         if cfg!(target_arch = "aarch64") {
             assert!(selected.name.contains("aarch64"));
         } else {
@@ -281,10 +280,39 @@ mod tests {
     }
 
     #[test]
+    fn test_select_dmg_tauri_naming() {
+        // 模拟 Tauri 实际构建产物命名
+        let assets = make_assets(&[
+            "easytier-pro_0.0.4_aarch64.dmg",
+            "easytier-pro_0.0.4_amd64.deb",
+            "easytier-pro_0.0.4_amd64.AppImage",
+            "easytier-pro-0.0.4-1.x86_64.rpm",
+        ]);
+
+        let selected = select_dmg_asset(&assets).unwrap();
+        // 应该选到 .dmg 而非 .deb/.AppImage
+        assert!(selected.name.ends_with(".dmg"));
+        if cfg!(target_arch = "aarch64") {
+            assert!(selected.name.contains("aarch64"));
+        }
+    }
+
+    #[test]
+    fn test_select_dmg_old_naming_compat() {
+        // 兼容旧命名 EasyTierManager-aarch64-v1.1.0.dmg
+        let assets = make_assets(&[
+            "EasyTierManager-arm64-v1.1.0.dmg",
+            "EasyTierManager-x86_64-v1.1.0.dmg",
+        ]);
+        let selected = select_dmg_asset(&assets).unwrap();
+        assert!(selected.name.ends_with(".dmg"));
+    }
+
+    #[test]
     fn test_select_dmg_fallback_to_first() {
         let assets = make_assets(&[
             "some-other-file.txt",
-            "EasyTierManager-arm64-v1.0.0.dmg",
+            "easytier-pro_0.0.4_aarch64.dmg",
         ]);
 
         let selected = select_dmg_asset(&assets).unwrap();
