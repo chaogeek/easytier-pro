@@ -25,15 +25,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # macOS ARM64
+          # macOS ARM64（仅支持 Apple Silicon）
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: dmg-macos-arm64
-            artifact_pattern: '*.dmg'
-          # macOS x86_64
-          - os: macos-13
-            target: x86_64-apple-darwin
-            artifact_name: dmg-macos-x86_64
             artifact_pattern: '*.dmg'
           # Windows x86_64
           - os: windows-latest
@@ -132,16 +127,6 @@ jobs:
           else
             echo "ARM64 DMG 下载失败，跳过"
           fi
-
-          # 下载 x86_64 DMG
-          X86_URL="${BASE_URL}/easytier-pro_${VERSION}_x86_64.dmg"
-          if curl -fSL -o x86_64.dmg "$X86_URL" 2>/dev/null; then
-            X86_SHA=$(shasum -a 256 x86_64.dmg | awk '{print $1}')
-            echo "x86_64_sha=${X86_SHA}" >> $GITHUB_OUTPUT
-            echo "x86_64 SHA256: ${X86_SHA}"
-          else
-            echo "x86_64 DMG 下载失败，跳过"
-          fi
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: 更新 Cask 文件
@@ -149,20 +134,13 @@ jobs:
         run: |
           VERSION="${{ steps.dmg_info.outputs.version }}"
           ARM64_SHA="${{ steps.dmg_info.outputs.arm64_sha }}"
-          X86_SHA="${{ steps.dmg_info.outputs.x86_64_sha }}"
 
           cat > tap/Casks/easytier-pro.rb << CASKDEF
           cask "easytier-pro" do
             version "VERSION_PLACEHOLDER"
-            sha256 arm:   "ARM64_SHA_PLACEHOLDER",
-                   intel: "X86_SHA_PLACEHOLDER"
+            sha256 arm: "ARM64_SHA_PLACEHOLDER"
 
-            on_arm do
-              url "https://github.com/chaogeek/easytier-pro/releases/download/vVERSION_PLACEHOLDER/easytier-pro_VERSION_PLACEHOLDER_aarch64.dmg"
-            end
-            on_intel do
-              url "https://github.com/chaogeek/easytier-pro/releases/download/vVERSION_PLACEHOLDER/easytier-pro_VERSION_PLACEHOLDER_x86_64.dmg"
-            end
+            url "https://github.com/chaogeek/easytier-pro/releases/download/vVERSION_PLACEHOLDER/easytier-pro_VERSION_PLACEHOLDER_aarch64.dmg"
 
             name "easytier-pro"
             desc "EasyTier 网络管家 — 组网 VPN 桌面管理工具"
@@ -182,7 +160,6 @@ jobs:
 
           sed -i "s/VERSION_PLACEHOLDER/${VERSION}/g" tap/Casks/easytier-pro.rb
           sed -i "s/ARM64_SHA_PLACEHOLDER/${ARM64_SHA}/g" tap/Casks/easytier-pro.rb
-          sed -i "s/X86_SHA_PLACEHOLDER/${X86_SHA:-PLACEHOLDER_X86_64_SHA256}/g" tap/Casks/easytier-pro.rb
 
           cat tap/Casks/easytier-pro.rb
 
